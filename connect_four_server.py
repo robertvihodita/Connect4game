@@ -80,3 +80,42 @@ def check_win(board, last_row, last_col, symbol):
                     board[r - 3][c + 3] == symbol: return True
     return False
 
+
+def make_move(col, symbol):
+    global game_board
+    try:
+        col = int(col)
+        if not (0 <= col < BOARD_COLS): return False, "Invalid column.", -1
+    except ValueError:
+        return False, "Not a number.", -1
+
+    for row_index in range(BOARD_ROWS - 1, -1, -1):
+        if game_board[row_index][col] == EMPTY_SLOT:
+            game_board[row_index][col] = symbol
+            return True, row_index, col
+    return False, "Column full.", -1
+
+
+def is_board_full():
+    return not any(EMPTY_SLOT in row for row in game_board)
+
+
+async def send_turn_state():
+    global current_player_symbol
+    player_x = next((conn for conn, (sym, _) in PLAYERS.items() if sym == 'X'), None)
+    player_o = next((conn for conn, (sym, _) in PLAYERS.items() if sym == 'O'), None)
+
+    async def safe_send(conn, msg):
+        try:
+            await conn.send(msg)
+        except:
+            pass
+
+    if player_x and player_o:
+        msg_x = to_json("game_state", {"board": game_board, "player": "X", "turn": current_player_symbol,
+                                       "status": "YOUR_TURN" if current_player_symbol == 'X' else f"Waiting for {current_player_symbol}"})
+        msg_o = to_json("game_state", {"board": game_board, "player": "O", "turn": current_player_symbol,
+                                       "status": "YOUR_TURN" if current_player_symbol == 'O' else f"Waiting for {current_player_symbol}"})
+        await safe_send(player_x, msg_x)
+        await safe_send(player_o, msg_o)
+
