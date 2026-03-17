@@ -119,3 +119,81 @@ async def send_turn_state():
         await safe_send(player_x, msg_x)
         await safe_send(player_o, msg_o)
 
+
+async def game_handler(websocket):
+    global current_player_symbol, game_active, restart_votes
+    async with game_lock:
+        if len(PLAYERS) < 2:
+            sym = 'X' if not any(s == 'X' for s, _ in PLAYERS.values()) else 'O'
+            PLAYERS[websocket] = (sym, websocket.remote_address)
+            await websocket.send(to_json("status", f"You are Player {sym}. Waiting..."))
+            if len(PLAYERS) == 2:
+                initialize_board()
+                current_player_symbol = 'X'
+                game_active = True
+                restart_votes.clear()
+                await broadcast_state("start", "Game starting!")
+                await send_turn_state()
+        else:
+            await websocket.send(to_json("status", "Game full."))
+            return
+
+    sym = PLAYERS[websocket][0]
+    try:
+        async for message in websocket:
+            data = json.loads(message)
+            if data['type'] == 'move':
+                async with game_lock:
+                    if not game_active:
+                        continue
+                    if sym != current_player_symbol:
+                        await websocket.send(to_json("error", "Not your turn."))
+                        continue
+                    success, r, c = make_move(data['column'], sym)
+                    if success:
+                        if check_win(game_board, r, c, sym):
+                            game_active = False
+                            await broadcast_state("game_over", {"message": f"Player {sym} WINS!", "board": game_board})
+                            continue
+                        if is_board_full():
+                            game_active = False
+                            await broadcast_state("game_over", {"message": "Draw!", "board": game_board})
+                            continue
+                        current_player_symbol = 'O' if sym == 'X' else 'X'
+                        await send_turn_state()
+            elif data['type'] == 'play_again':
+                async with game_lock:
+                    restart_votes.add(sym)
+                    await broadcast_state("restart_vote", f"Player {sym} wants to play again ({len(restart_votes)}/2)")
+                    if len(restart_votes) == 2:
+                        initialize_board()
+                        current_player_symbol = 'X'
+                        game_active = True
+                        restart_votes.clear()
+                        await broadcast_state("start", "Game Restarted!")
+                        await send_turn_state()
+    except:
+        pass
+    finally:
+        async with game_lock:
+            if websocket in PLAYERS: del PLAYERS[websocket]
+            if len(PLAYERS) == 1:
+                game_active = False
+                restart_votes.clear()
+                await broadcast_state("opponent_left", {"message": "Opponent left.", "board": game_board})
+                PLAYERS.clear()
+
+
+async def main():
+    web_thread = threading.Thread(target=run_web_server, daemon=True)
+    web_thread.start()
+
+    print(f" Game server running. Websocket port: {GAME_PORT}")
+    async with websockets.serve(game_handler, GAME_HOST, GAME_PORT):
+        await asyncio.Future()
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Server stopped.")
