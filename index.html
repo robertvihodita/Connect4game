@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Connect Four</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .board-container {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 6px;
+            padding: 12px;
+            background-color: #334155;
+            border-radius: 1rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+            max-width: fit-content;
+        }
+
+        .board-cell {
+            width: 65px;
+            height: 65px;
+            background-color: #1e293b;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+        }
+
+        .piece-X {
+            background-color: #ef4444;
+            box-shadow: inset 0 0 12px rgba(0,0,0,0.6);
+            animation: dropIn 0.3s ease-out;
+        }
+
+        .piece-O {
+            background-color: #facc15;
+            box-shadow: inset 0 0 12px rgba(0,0,0,0.6);
+            animation: dropIn 0.3s ease-out;
+        }
+
+        @keyframes dropIn {
+            0% { transform: translateY(-50px) scale(0.8); opacity: 0; }
+            100% { transform: translateY(0) scale(1); opacity: 1; }
+        }
+
+        .col-btn {
+            height: 45px;
+            font-weight: bold;
+            font-size: 1.2rem;
+            cursor: pointer;
+            transition: transform 0.1s, background-color 0.2s;
+        }
+        .col-btn:hover:not(:disabled) { transform: translateY(-3px); }
+        .col-btn:active:not(:disabled) { transform: translateY(1px); }
+        .col-btn:disabled {
+            background-color: #475569;
+            color: #94a3b8;
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen flex flex-col items-center justify-center p-4 font-sans relative">
+
+    <div id="main-menu" class="absolute inset-0 bg-gray-900 z-50 flex flex-col items-center justify-center">
+        <h1 class="text-6xl font-extrabold text-indigo-400 tracking-tight mb-10 shadow-sm">Connect Four</h1>
+        <div class="flex flex-col gap-6 w-80">
+            <button onclick="startLocal()" class="bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 px-6 rounded-2xl text-xl shadow-lg transform transition hover:scale-105 flex justify-center items-center gap-2">
+                🛋️ Couch Co-op
+            </button>
+            <button onclick="startOnline()" class="bg-green-600 hover:bg-green-500 text-white font-bold py-4 px-6 rounded-2xl text-xl shadow-lg transform transition hover:scale-105 flex justify-center items-center gap-2">
+                🌐 Multiplayer Online
+            </button>
+        </div>
+    </div>
+
+    <header class="text-center mb-6">
+        <h1 class="text-5xl font-extrabold text-indigo-400 tracking-tight mb-2">Connect Four</h1>
+        <div id="connection-status" class="text-lg font-medium text-gray-500">Alege un mod de joc...</div>
+    </header>
+
+    <main class="bg-gray-800 p-8 rounded-2xl shadow-2xl relative">
+        <div class="mb-6 text-center">
+            <div id="player-badge" class="inline-block px-4 py-1 rounded-full text-sm font-bold mb-2 bg-gray-700 text-gray-300">
+                Spectator / Connecting...
+            </div>
+            <div id="turn-status" class="text-2xl font-bold text-gray-100">
+                Waiting for game to start...
+            </div>
+        </div>
+
+        <div id="buttons" class="grid grid-cols-7 gap-2 mb-4"></div>
+        <div class="flex justify-center">
+            <div id="board" class="board-container"></div>
+        </div>
+
+        <div id="restart-container" class="mt-6 text-center hidden">
+            <button id="restart-btn" onclick="sendRestart()"
+                    class="bg-green-600 hover:bg-green-500 text-white font-bold py-3 px-8 rounded-full shadow-lg transform transition hover:scale-105">
+                🔄 Play Again
+            </button>
+        </div>
+    </main>
+
+    <script>
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const host = window.location.hostname;
+        const port = '8765';
+        const WEBSOCKET_URL = `${protocol}//${host}:${port}`;
+
+        let ws = null;
+        let mySymbol = '';
+        let isMyTurn = false;
+
+        // Local Mode State
+        let gameMode = '';
+        let localBoard = [];
+        let localTurn = 'X';
+        let localGameActive = false;
+
+        const statusEl = document.getElementById('connection-status');
+        const badgeEl = document.getElementById('player-badge');
+        const turnEl = document.getElementById('turn-status');
+        const restartContainer = document.getElementById('restart-container');
+        const restartBtn = document.getElementById('restart-btn');
+        const boardEl = document.getElementById('board');
+        const buttonsEl = document.getElementById('buttons');
+
+        function startLocal() {
+            document.getElementById('main-menu').style.display = 'none';
+            gameMode = 'local';
+            statusEl.textContent = "Mod: Couch Co-op (Local)";
+            statusEl.className = "text-lg font-medium text-blue-400";
+            initGameUI();
+            initLocalLogic();
+        }
+
+        function startOnline() {
+            document.getElementById('main-menu').style.display = 'none';
+            gameMode = 'online';
+            statusEl.textContent = "Connecting to server...";
+            initGameUI();
+            connect();
+        }
+
+        function initGameUI() {
+            boardEl.innerHTML = '';
+            buttonsEl.innerHTML = '';
+
+            for(let c=0; c<7; c++) {
+                let btn = document.createElement('button');
+                btn.className = "col-btn bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg shadow-md";
+                btn.innerHTML = "⬇";
+                btn.id = `btn-${c}`;
+                btn.disabled = true;
+                btn.onclick = () => {
+                    if (gameMode === 'local') handleLocalMove(c);
+                    else sendMove(c);
+                };
+                buttonsEl.appendChild(btn);
+            }
+
+            for(let r=0; r<6; r++) {
+                for(let c=0; c<7; c++) {
+                    let cell = document.createElement('div');
+                    cell.className = 'board-cell';
+                    cell.id = `c-${r}-${c}`;
+                    boardEl.appendChild(cell);
+                }
+            }
+        }
+
+        // --- LOCAL COUCH CO-OP LOGIC ---
+        function initLocalLogic() {
+            localBoard = Array(6).fill(null).map(() => Array(7).fill(' '));
+            localTurn = 'X';
+            localGameActive = true;
+            updateBoard(localBoard);
+
+            badgeEl.textContent = "Local Co-op";
+            badgeEl.className = "inline-block px-4 py-1 rounded-full text-sm font-bold mb-2 bg-blue-900 text-blue-200 border border-blue-500";
+            turnEl.textContent = `Player X's Turn (Red)`;
+            turnEl.className = "text-2xl font-bold text-red-400";
+
+            toggleButtons(true);
+            restartContainer.classList.add('hidden');
+        }
+
+        function handleLocalMove(col) {
+            if (!localGameActive) return;
+
+            let placedRow = -1;
+            for (let r = 5; r >= 0; r--) {
+                if (localBoard[r][col] === ' ') {
+                    localBoard[r][col] = localTurn;
+                    placedRow = r;
+                    break;
+                }
+            }
+            if (placedRow === -1) return;
+
+            updateBoard(localBoard);
+
+            if (checkLocalWin(localBoard, placedRow, col, localTurn)) {
+                localGameActive = false;
+                turnEl.textContent = `Player ${localTurn} WINS!`;
+                turnEl.className = "text-3xl font-extrabold text-indigo-400 animate-pulse";
+                toggleButtons(false);
+                restartContainer.classList.remove('hidden');
+                return;
+            }
+
+            if (localBoard.every(row => row.every(cell => cell !== ' '))) {
+                localGameActive = false;
+                turnEl.textContent = "Draw!";
+                toggleButtons(false);
+                restartContainer.classList.remove('hidden');
+                return;
+            }
+
+            localTurn = localTurn === 'X' ? 'O' : 'X';
+            turnEl.textContent = `Player ${localTurn}'s Turn ${localTurn === 'X' ? '(Red)' : '(Yellow)'}`;
+            turnEl.className = localTurn === 'X' ? "text-2xl font-bold text-red-400" : "text-2xl font-bold text-yellow-400";
+        }
+
+        function checkLocalWin(board, r, c, sym) {
+            const dirs = [[0, 1], [1, 0], [1, 1], [1, -1]];
+            for (let [dr, dc] of dirs) {
+                let count = 1;
+                for (let i = 1; i <= 3; i++) {
+                    let nr = r + dr * i, nc = c + dc * i;
+                    if (nr >= 0 && nr < 6 && nc >= 0 && nc < 7 && board[nr][nc] === sym) count++; else break;
+                }
+                for (let i = 1; i <= 3; i++) {
+                    let nr = r - dr * i, nc = c - dc * i;
+                    if (nr >= 0 && nr < 6 && nc >= 0 && nc < 7 && board[nr][nc] === sym) count++; else break;
+                }
+                if (count >= 4) return true;
+            }
+            return false;
+        }
+
+        // --- ONLINE MULTIPLAYER LOGIC ---
+        function connect() {
+            ws = new WebSocket(WEBSOCKET_URL);
+            ws.onopen = () => {
+                statusEl.textContent = "Connected to Game Server";
+                statusEl.className = "text-lg font-medium text-green-500";
+            };
+            ws.onmessage = (event) => {
+                const msg = JSON.parse(event.data);
+                handleServerMessage(msg);
+            };
+            ws.onclose = () => {
+                statusEl.textContent = "Disconnected from Server";
+                statusEl.className = "text-lg font-medium text-red-500";
+                toggleButtons(false);
+            };
+        }
+
+        function sendMove(colIndex) {
+            if(isMyTurn && ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'move', column: colIndex }));
+                toggleButtons(false);
+            }
+        }
+
+        function sendRestart() {
+            if (gameMode === 'local') {
+                initLocalLogic();
+            } else {
+                ws.send(JSON.stringify({ type: 'play_again' }));
+                restartBtn.disabled = true;
+                restartBtn.classList.add('opacity-50', 'cursor-not-allowed');
+                turnEl.textContent = "Waiting for opponent to accept...";
+                turnEl.className = "text-xl font-medium text-gray-400";
+            }
+        }
+
+        function handleServerMessage(msg) {
+            const type = msg.type;
+            const data = msg.data;
+
+            if (type === 'status') {
+                if (data.includes("Player X")) {
+                    mySymbol = 'X';
+                    badgeEl.textContent = "You are Player X (Red)";
+                    badgeEl.className = "inline-block px-4 py-1 rounded-full text-sm font-bold mb-2 bg-red-900 text-red-200 border border-red-500";
+                } else if (data.includes("Player O")) {
+                    mySymbol = 'O';
+                    badgeEl.textContent = "You are Player O (Yellow)";
+                    badgeEl.className = "inline-block px-4 py-1 rounded-full text-sm font-bold mb-2 bg-yellow-900 text-yellow-200 border border-yellow-500";
+                }
+                turnEl.textContent = data;
+            }
+            else if (type === 'start') {
+                restartContainer.classList.add('hidden');
+                restartBtn.disabled = false;
+                restartBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                turnEl.textContent = "Game Started!";
+            }
+            else if (type === 'restart_vote') {
+                turnEl.textContent = data;
+                turnEl.className = "text-xl font-medium text-gray-300";
+            }
+            else if (type === 'game_state') {
+                updateBoard(data.board);
+                isMyTurn = (data.turn === mySymbol);
+                toggleButtons(isMyTurn);
+
+                if (isMyTurn) {
+                    turnEl.textContent = "It is YOUR Turn!";
+                    turnEl.className = "text-2xl font-bold text-green-400 animate-pulse";
+                } else {
+                    turnEl.textContent = `Waiting for Player ${data.turn}...`;
+                    turnEl.className = "text-2xl font-bold text-gray-400";
+                }
+            }
+            else if (type === 'game_over' || type === 'opponent_left') {
+                if (data.board) updateBoard(data.board);
+
+                turnEl.textContent = data.message;
+                turnEl.className = "text-3xl font-extrabold text-indigo-400 animate-pulse";
+
+                toggleButtons(false);
+                if (type === 'game_over') restartContainer.classList.remove('hidden');
+            }
+            else if (type === 'error') {
+                alert(data);
+                if (isMyTurn) toggleButtons(true);
+            }
+        }
+
+        function updateBoard(board) {
+            for (let r = 0; r < 6; r++) {
+                for (let c = 0; c < 7; c++) {
+                    const cell = document.getElementById(`c-${r}-${c}`);
+                    const val = board[r][c].trim();
+
+                    cell.classList.remove('piece-X', 'piece-O');
+                    if (val === 'X') cell.classList.add('piece-X');
+                    if (val === 'O') cell.classList.add('piece-O');
+                }
+            }
+        }
+
+        function toggleButtons(enabled) {
+            for(let c=0; c<7; c++) {
+                const btn = document.getElementById(`btn-${c}`);
+                if (btn) btn.disabled = !enabled;
+            }
+        }
+    </script>
+</body>
+</html>
